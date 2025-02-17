@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neural Network Approximation</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.7/dat.gui.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: #ddd;
+            font-family: Arial, sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <script>
+        // true function setup
+        function trueFunction(x) {
+            return Math.sin(x);
+        }
+
+        class NeuralNetwork {
+            constructor(neurons, activation) {
+                if (neurons < 1)
+                    neurons = 1;
+                this.neurons = neurons;
+                this.params = [];
+                for (let i = 0; i < neurons*3; i++) {
+                    this.params.push(Math.random() * 2 - 1);
+                }
+                this.params.push(Math.random() * 2 - 1);
+                this.activation = activation;
+            }
+
+            copy(nn) {
+                this.neurons = nn.neurons;
+                this.params = nn.params.slice();
+                this.activation = nn.activation;
+            }
+
+            forward(x) {
+                let final = 0;
+                for (let i = 0; i < this.neurons; i++) {
+                    const w1 = this.params[i * 3];
+                    const b = this.params[i * 3 + 1];
+                    const w2 = this.params[i * 3 + 2];
+                    final += this.activation(w1 * x + b) * w2;
+                }
+                const out_bias = this.params[this.params.length - 1];
+                return final + out_bias;
+            }
+        }
+
+        currentNetwork = new NeuralNetwork(2, Math.tanh);
+
+        // Three.js setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a1a);
+        const camera = new THREE.OrthographicCamera(-5, 5, 2, -2, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        camera.position.z = 5;
+
+        // Create lines
+        const trueLineGeometry = new THREE.BufferGeometry();
+        const approximatedLineGeometry = new THREE.BufferGeometry();
+
+        const lineResolution = 100;
+        const truePositions = new Float32Array(lineResolution * 3);
+        const approximatedPositions = new Float32Array(lineResolution * 3);
+
+        for (let i = 0; i < lineResolution; i++) {
+            const x = (i / lineResolution) * 10 - 5;
+            const trueY = trueFunction(x);
+            const approximatedY = currentNetwork.forward(x);
+
+            truePositions[i * 3] = x;
+            truePositions[i * 3 + 1] = trueY;
+            truePositions[i * 3 + 2] = 0;
+
+            approximatedPositions[i * 3] = x;
+            approximatedPositions[i * 3 + 1] = approximatedY;
+            approximatedPositions[i * 3 + 2] = 0;
+        }
+
+        trueLineGeometry.setAttribute('position', new THREE.BufferAttribute(truePositions, 3));
+        approximatedLineGeometry.setAttribute('position', new THREE.BufferAttribute(approximatedPositions, 3));
+
+        const trueLine = new THREE.Line(trueLineGeometry, new THREE.LineBasicMaterial({ color: 0x00ff00 }));
+        const approximatedLine = new THREE.Line(approximatedLineGeometry, new THREE.LineBasicMaterial({ color: 0xff4444 }));
+
+        const group = new THREE.Group();
+        group.add(trueLine);
+
+        // random data points
+        const XData = Array.from({ length: 100 }, () => Math.random() * 8 - 4);
+        const dataPoints = XData.map(x => new THREE.Vector3(x, trueFunction(x), 0));
+
+        function lossFunction(predicted, target) {
+            return Math.pow(predicted - target, 2);
+        }
+
+        function calculateLoss(network) {
+            let totalLoss = 0;
+            for (let point of dataPoints) {
+                const approximatedY = network.forward(point.x);
+                totalLoss += lossFunction(approximatedY, point.y);
+            }
+            return totalLoss / dataPoints.length;
+        }
+
+        const pointGeometry = new THREE.BufferGeometry();
+        const pointMaterial = new THREE.PointsMaterial({ size: 10, color: 0x00ff00 });
+
+
+        const positions = new Float32Array(dataPoints.length * 3);
+        const colors = new Float32Array(dataPoints.length * 3);
+
+        pointGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        pointGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+        const points = new THREE.Points(pointGeometry, pointMaterial);
+        pointGeometry.setFromPoints(dataPoints)
+        group.add(points);
+
+        camera.position.set(0, 0, 5);
+
+        group.add(approximatedLine);
+        scene.add(group);
+
+        // GUI setup
+        const gui = new dat.GUI();
+        const controls = {
+            w1: currentNetwork.params[0],
+            w2: currentNetwork.params[1],
+            w3: currentNetwork.params[2],
+            w4: currentNetwork.params[3],
+            w5: currentNetwork.params[4],
+            w6: currentNetwork.params[5],
+            loss: 0.01,
+            activationFunction: 'tanh',
+            step: localSearchStep,
+            train: false,
+        };
+        console.log(controls);
+
+
+        gui.add(controls, 'w1', -10, 10).name('1').onChange(updateNetwork);
+        gui.add(controls, 'w2', -10, 10).name('2').onChange(updateNetwork);
+        gui.add(controls, 'w3', -10, 10).name('3').onChange(updateNetwork);
+        gui.add(controls, 'w4', -10, 10).name('4').onChange(updateNetwork);
+        gui.add(controls, 'w5', -10, 10).name('5').onChange(updateNetwork);
+        gui.add(controls, 'w6', -10, 10).name('6').onChange(updateNetwork);
+        gui.add(controls, 'step').name('Local Search Step');
+        let interval = null;
+        gui.add(controls, 'train').name('Train').onChange(() => {
+            if (controls.train) {
+                interval = setInterval(localSearchStep, 100);
+            } else {
+                clearInterval(interval);
+            }
+        });
+
+        let oldloss = 0;
+        gui.add(controls, 'loss').listen().onChange(() => {
+            controls.loss=oldloss;
+            oldloss=controls.loss;
+            gui.updateDisplay();
+        });
+        gui.add(controls, 'activationFunction', ['tanh', 'sigmoid', 'relu', 'leakyRelu', 'linear', 'step', 'sin', 'abs']).onChange(updateActivation);
+
+        function updateActivation() {
+            switch(controls.activationFunction) {
+                case 'tanh':
+                    currentNetwork.activation = Math.tanh;
+                    break;
+                case 'sigmoid':
+                    currentNetwork.activation = x => 1 / (1 + Math.exp(-x));
+                    break;
+                case 'relu':
+                    currentNetwork.activation = x => Math.max(0, x);
+                    break;
+                case 'leakyRelu':
+                    currentNetwork.activation = x => x > 0 ? x : 0.1 * x;
+                    break;
+                case 'linear':
+                    currentNetwork.activation = x => x;
+                    break;
+                case 'step':
+                    currentNetwork.activation = x => x > 0 ? 1 : 0;
+                    break;
+                case 'sin':
+                    currentNetwork.activation = Math.sin;
+                    break;
+                case 'abs':
+                    currentNetwork.activation = Math.abs;
+                    break;
+            }
+            updateNetwork();
+        }
+
+        function localSearchStep() {
+            let bestLoss = calculateLoss(currentNetwork);
+            let bestNetwork = new NeuralNetwork();
+            bestNetwork.copy(currentNetwork);
+            for (let i = 0; i < 100; i++) {
+                const newNetwork = new NeuralNetwork();
+                newNetwork.copy(currentNetwork);
+
+                const step = 0.2;
+                function mutate(value) {
+                    return value + (Math.random() - 0.5) * step;
+                }
+                newNetwork.params = newNetwork.params.map(mutate);
+
+                let loss = calculateLoss(newNetwork);
+
+                if (loss < bestLoss) {
+                    bestLoss = loss;
+                    bestNetwork.copy(newNetwork);
+                }
+            }
+
+            currentNetwork.copy(bestNetwork);
+            controls.w1 = currentNetwork.params[0];
+            controls.w2 = currentNetwork.params[1];
+            controls.w3 = currentNetwork.params[2];
+            controls.w4 = currentNetwork.params[3];
+            controls.w5 = currentNetwork.params[4];
+            controls.w6 = currentNetwork.params[5];
+            gui.updateDisplay();
+            updateNetwork();
+
+        }
+
+        function updateNetwork() {
+            const p = currentNetwork.params;
+            p[0] = controls.w1;
+            p[1] = controls.w2;
+            p[2] = controls.w3;
+            p[3] = controls.w4;
+            p[4] = controls.w5;
+            p[5] = controls.w6;
+
+            for (let i = 0; i < lineResolution; i++) {
+                const x = (i / lineResolution) * 10 - 5;
+                const approximatedY = currentNetwork.forward(x);
+                approximatedPositions[i * 3 + 1] = approximatedY;
+            }
+
+            controls.loss = calculateLoss(currentNetwork);
+            gui.updateDisplay();
+
+            approximatedLineGeometry.attributes.position.needsUpdate = true;
+        }
+
+        let scale = 1;
+        const minScale = 0.5;
+        const maxScale = 2;
+
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        // Handle window resize and scroll
+        window.addEventListener('resize', onWindowResize);
+        window.addEventListener('wheel', onScroll);
+
+        function onWindowResize() {
+            const aspect = window.innerWidth / window.innerHeight;
+            const frustumHeight = 4 / scale;
+            const frustumWidth = frustumHeight * aspect;
+            camera.left = -frustumWidth / 2;
+            camera.right = frustumWidth / 2;
+            camera.top = frustumHeight / 2;
+            camera.bottom = -frustumHeight / 2;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function onScroll(event) {
+            scale += event.deltaY * -0.001;
+            scale = Math.min(Math.max(minScale, scale), maxScale);
+            
+            group.scale.set(scale, scale, 1);
+            onWindowResize();
+        }
+
+        onWindowResize();
+    </script>
+</body>
+</html>

@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neural Mountaineer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.7/dat.gui.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        .function {
+            -webkit-user-select: none; /* Safari */
+            -moz-user-select: none; /* Firefox */
+            -ms-user-select: none; /* IE10+/Edge */
+            user-select: none; /* Standard */
+        }
+        select {
+            background-color: #333;
+            color: white;
+            border: none;
+        }
+        .dg {
+            font-size: 14px;
+        }
+
+    </style>
+</head>
+<body>
+    <script>
+        // Climbing Neural Mountain
+        let topHeight, bottomHeight;
+        const calcHeights = () => {
+            topHeight = window.innerHeight / 3;
+            bottomHeight = window.innerHeight - topHeight;
+        };
+        calcHeights();
+        const sceneTop = new THREE.Scene();
+        const sceneBottom = new THREE.Scene();
+        sceneTop.background = new THREE.Color(0x1a1a1a);
+        const cameraTop = new THREE.PerspectiveCamera(75, window.innerWidth / topHeight, 0.1, 1000);
+        const cameraBottom = new THREE.PerspectiveCamera(45, window.innerWidth / bottomHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.autoClear = false;
+        document.body.appendChild(renderer.domElement);
+
+        // Create materials for the lines, points, and loss landscape
+        const targetColor = 0x0000ff;
+        // yellow: 0xffff00, green: 0x00ff00, blue: 0x0000ff, red: 0xff0000, purple: 0x800080
+        const approxColor = 0x00ff00;
+        const targetMaterial = new THREE.LineBasicMaterial({ color: targetColor });
+        const approxMaterial = new THREE.LineBasicMaterial({ color: approxColor });
+        const truePointMaterial = new THREE.PointsMaterial({ color: targetColor, size: 0.08, opacity: 0.8, transparent: true });
+        const lossGroup = new THREE.Group();
+        const lossLandMaterial = new THREE.MeshPhongMaterial({ 
+            side: THREE.DoubleSide,
+            // color: 0xff0000,
+            vertexColors: true,
+            shininess: 25,
+            // specular: 0x111111,
+            // flatShading: true
+
+        });
+        // q: what does vertexColors do?
+        // a: it allows the mesh to be colored by the colors of its vertices m
+        const lossWireframeMaterial = new THREE.MeshBasicMaterial({ 
+            color: 0xffffff, 
+            wireframe: true, 
+            transparent: true,
+            opacity: 0.05
+        });
+        const currentlossLandMaterial = new THREE.MeshBasicMaterial({ color: approxColor });
+        const baselineGeometry = new THREE.PlaneGeometry(20, 20, 20, 20);
+        const baselineMaterial = new THREE.MeshBasicMaterial({
+            color: 0x808080,
+            wireframe: true,
+            transparent: true,
+            opacity: 0.3
+        });
+        const gradientVec = new THREE.Vector3(0, 0, 0);
+        const gradientMaterial = new THREE.LineBasicMaterial({ 
+            color: 0x00ff00,
+        });
+        const gradientGeometry = new THREE.BufferGeometry();
+        const gradientMesh = new THREE.Line(gradientGeometry, gradientMaterial);
+
+        // Create geometries for the lines, points, and loss landscape
+        const targetGeometry = new THREE.BufferGeometry();
+        const approxGeometry = new THREE.BufferGeometry();
+        const truePointGeometry = new THREE.BufferGeometry();
+        const lossLandGeometry = new THREE.BufferGeometry();
+        const currentlossGeometry = new THREE.SphereGeometry(0.05, 32, 32);
+
+        // Create the lines, points, and loss landscape
+        const targetLine = new THREE.Line(targetGeometry, targetMaterial);
+        const approxLine = new THREE.Line(approxGeometry, approxMaterial);
+        const trueDataPoints = new THREE.Points(truePointGeometry, truePointMaterial);
+
+        const lossLandMesh = new THREE.Mesh(lossLandGeometry, lossLandMaterial);
+        lossLandMesh.add(new THREE.Mesh(lossLandGeometry, lossWireframeMaterial));
+        const currentLossPoint = new THREE.Mesh(currentlossGeometry, currentlossLandMaterial);
+        const baselineMesh = new THREE.Mesh(baselineGeometry, baselineMaterial);
+
+        // Add objects to the scenes
+        const topGroup = new THREE.Group();
+        topGroup.add(targetLine);
+        topGroup.add(approxLine);
+        topGroup.add(trueDataPoints);
+        topGroup.scale.set(2, 2, 2);
+        sceneTop.add(topGroup);
+
+        // Set up camera positions
+        cameraTop.position.set(0, 0, 5);
+        cameraBottom.position.set(0, -5, 5);
+        cameraBottom.lookAt(0, 0, 0);
+
+        // Add lights to the bottom scene
+        const ambientLight = new THREE.AmbientLight(0x404040);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.7);
+        directionalLight.position.set(1, 1, 1);
+        sceneBottom.add(ambientLight);
+        sceneBottom.add(directionalLight);
+
+        let targetFunction = new Function('x', 'return Math.sin(x)');
+        function changeTargetFunction() {
+            // check is function is valid
+            try {
+                targetFunction = new Function('x', `return ${params.targetFunction}`);
+                updateGraphs();
+            } catch (e) {
+                console.warn(e);
+            }
+        }
+        
+        class Approximator {
+            constructor() {
+                this.a = 1;
+                this.b = 0;
+            }
+        }
+        
+        const approximator = new Approximator();
+        const custom_approx = new Approximator();
+
+        const approxWithParams = function (x, a, b) {
+            custom_approx.a = a;
+            custom_approx.b = b;
+            return custom_approx.f(x);
+        }
+
+        function setApproximator(name) {
+            if (name === 'tanh') {
+                approximator.f = function (x) {
+                    return Math.tanh(this.a * x + this.b);
+                }
+                approximator.dYdA = function (x) {
+                    return (1 - Math.pow(Math.tanh(this.a * x + this.b), 2)) * x;
+                }
+                approximator.dYdB = function (x) {
+                    return 1 - Math.pow(Math.tanh(this.a * x + this.b), 2);
+                }
+            } else if (name === 'sin') {
+                approximator.f = function (x) {
+                    return Math.sin(this.a * x + this.b);
+                }
+                approximator.dYdA = function (x) {
+                    return x * Math.cos(this.a * x + this.b);
+                }
+                approximator.dYdB = function (x) {
+                    return Math.cos(this.a * x + this.b);
+                }
+            } else if (name === 'relu') {
+                approximator.f = function (x) {
+                    return Math.max(0, this.a * x + this.b);
+                }
+                approximator.dYdA = function (x) {
+                    return (this.a * x + this.b) > 0 ? x : 0;
+                }
+                approximator.dYdB = function (x) {
+                    return (this.a * x + this.b) > 0 ? 1 : 0;
+                }
+            } else if (name === 'leaky relu') {
+                approximator.f = function (x) {
+                    return (this.a * x + this.b) > 0 ? (this.a * x + this.b) : 0.1 * (this.a * x + this.b);
+                }
+                approximator.dYdA = function (x) {
+                    return (this.a * x + this.b) > 0 ? x : 0.1 * x;
+                }
+                approximator.dYdB = function (x) {
+                    return (this.a * x + this.b) > 0 ? 1 : 0.1;
+                }
+            } else if (name === 'gelu') {
+                approximator.f = function (x) {
+                    let z = this.a * x + this.b;
+                    return 0.5 * (1 + Math.tanh(Math.sqrt(2 / Math.PI) * (z + 0.044715 * Math.pow(z, 3))));
+                }
+                approximator.dYdA = function (x) {
+                    let z = this.a * x + this.b;
+                    let u = Math.sqrt(2 / Math.PI) * (z + 0.044715 * Math.pow(z, 3));
+                    let tanhU = Math.tanh(u);
+                    let dTanh = 1 - tanhU * tanhU;
+                    let du_da = Math.sqrt(2 / Math.PI) * x * (1 + 3 * 0.044715 * z * z);
+                    return 0.5 * dTanh * du_da;
+                }
+                approximator.dYdB = function (x) {
+                    let z = this.a * x + this.b;
+                    let u = Math.sqrt(2 / Math.PI) * (z + 0.044715 * Math.pow(z, 3));
+                    let tanhU = Math.tanh(u);
+                    let dTanh = 1 - tanhU * tanhU;
+                    let du_db = Math.sqrt(2 / Math.PI) * (1 + 3 * 0.044715 * z * z);
+                    return 0.5 * dTanh * du_db;
+                }
+            } else if (name === 'sigmoid') {
+                approximator.f = function (x) {
+                    return 1 / (1 + Math.exp(-(this.a * x + this.b)));
+                }
+                approximator.dYdA = function (x) {
+                    const y = this.f(x);
+                    return y * (1 - y) * x;
+                }
+                approximator.dYdB = function (x) {
+                    const y = this.f(x);
+                    return y * (1 - y);
+                }
+            } else if (name === 'gaussian') {
+                approximator.f = function (x) {
+                    return Math.exp(-Math.pow(this.a * x + this.b, 2) / 2);
+                }
+                approximator.dYdA = function (x) {
+                    return -x * (this.a * x + this.b) * this.f(x);
+                }
+                approximator.dYdB = function (x) {
+                    return -(this.a * x + this.b) * this.f(x);
+                }
+            } else if (name === 'softplus') {
+                approximator.f = function (x) {
+                    return Math.log(1 + Math.exp(this.a * x + this.b));
+                }
+                approximator.dYdA = function (x) {
+                    return x * Math.exp(this.a * x + this.b) / (1 + Math.exp(this.a * x + this.b));
+                }
+                approximator.dYdB = function (x) {
+                    return Math.exp(this.a * x + this.b) / (1 + Math.exp(this.a * x + this.b));
+                }
+            } else if (name === 'abs') {
+                approximator.f = function (x) {
+                    return Math.abs(this.a * x + this.b);
+                }
+                approximator.dYdA = function (x) {
+                    return (this.a * x + this.b) >= 0 ? x : -x;
+                }
+                approximator.dYdB = function (x) {
+                    return (this.a * x + this.b) >= 0 ? 1 : -1;
+                }
+            } else {
+                approximator.f = function (x) {
+                    return this.a * x + this.b;
+                }
+                approximator.dYdA = function (x) {
+                    return x;
+                }
+                approximator.dYdB = function (x) {
+                    return 1;
+                }
+            }
+            custom_approx.f = approximator.f;
+            custom_approx.dYdA = approximator.dYdA;
+            custom_approx.dYdB = approximator.dYdB;
+        }
+        setApproximator('tanh');
+
+        // Define the data points
+        const dataPointsX = [];
+
+        // Function to calculate loss
+        function calculateLoss(a, b) {
+            return dataPointsX.reduce((sum, d) => {
+                const trueY = targetFunction(d);
+                const predictedY = approxWithParams(d, a, b);
+                if (params.lossFunction === 'MSE') {
+                    return sum + Math.pow(trueY - predictedY, 2);
+                } else { // MAE
+                    return sum + Math.abs(trueY - predictedY);
+                }
+            }, 0) / dataPointsX.length;
+        }
+
+        function calculateGradient() {
+            let dLoss_da = 0;
+            let dLoss_db = 0;
+
+            for (const x of dataPointsX) {
+                const trueY = targetFunction(x);
+                const predictedY = approximator.f(x);
+                
+                const dLoss_dY = params.lossFunction === 'MSE' 
+                    ? 2 * (predictedY - trueY)
+                    : Math.sign(predictedY - trueY);
+                    
+                dLoss_da += dLoss_dY * approximator.dYdA(x);
+                dLoss_db += dLoss_dY * approximator.dYdB(x);
+            }
+
+            dLoss_da /= dataPointsX.length;
+            dLoss_db /= dataPointsX.length;
+
+            return [dLoss_da, dLoss_db];
+        }
+
+        // Function to update the top graph
+        function updateTopGraph() {
+            const a = approximator.a;
+            const b = approximator.b;
+            const points = 1000;
+            const targetPoints = [];
+            const approxPoints = [];
+
+            for (let i = 0; i <= points; i++) {
+                const x = (i / points) * 6 * Math.PI - 3 * Math.PI;
+                const y1 = targetFunction(x);
+                const y2 = approximator.f(x);
+
+                targetPoints.push(new THREE.Vector3(x, y1, 0));
+                approxPoints.push(new THREE.Vector3(x, y2, 0));
+            }
+
+            targetGeometry.setFromPoints(targetPoints);
+            approxGeometry.setFromPoints(approxPoints);
+
+            // Update data points
+            const approxData = [];
+            const trueData = [];
+            for (const x of dataPointsX) {
+                approxData.push(new THREE.Vector3(x, approximator.f(x), 0));
+                trueData.push(new THREE.Vector3(x, targetFunction(x), 0));
+            }
+            truePointGeometry.setFromPoints(trueData);
+        }
+
+        // Function to update the bottom graph (3D loss landscape)
+        function updateBottomGraph() {
+            const a = approximator.a;
+            const b = approximator.b;
+            const size = params.landscapeSize;
+            const resolution = 50;
+            const vertices = [];
+            const colors = [];
+
+            for (let i = 0; i <= resolution; i++) {
+                for (let j = 0; j <= resolution; j++) {
+                    let a_val = (i / resolution) * size - size / 2;
+                    let b_val = (j / resolution) * size - size / 2;
+                    if (params.followLoss) {
+                        a_val += a;
+                        b_val += b;
+                    }
+                    const loss = calculateLoss(a_val, b_val);
+
+                    vertices.push(a_val, b_val, loss);
+
+                    const intensity = Math.min(1, Math.max(0, loss));
+                    colors.push(intensity, 0, 1 - intensity);
+                }
+            }
+
+            const indices = [];
+            for (let i = 0; i < resolution; i++) {
+                for (let j = 0; j < resolution; j++) {
+                    const a = i * (resolution + 1) + j;
+                    const b = a + 1;
+                    const c = (i + 1) * (resolution + 1) + j;
+                    const d = c + 1;
+                    indices.push(a, b, d);
+                    indices.push(a, d, c);
+                }
+            }
+
+            lossLandGeometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+            lossLandGeometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+            lossLandGeometry.setIndex(indices);
+            lossLandGeometry.computeVertexNormals();
+
+            baselineMesh.scale.set(size/20, size/20, 1);
+
+            const currentLoss = calculateLoss(a, b);
+
+            let height = params.showLandscape ? currentLoss : 0;
+            if (params.followLoss) {
+                lossLandMesh.position.set(-a, -b, 0);
+                gradientMesh.position.set(-a, -b, 0);
+                currentLossPoint.position.set(0, 0, height);
+            } else {
+                currentLossPoint.position.set(a, b, height);
+                gradientMesh.position.set(0, 0, 0);
+                lossLandMesh.position.set(0, 0, 0);
+            }
+
+            // Update gradient vector
+            const [dLoss_da, dLoss_db] = calculateGradient();
+            if (params.showLandscape) {
+                gradientVec.set(dLoss_da, dLoss_db, dLoss_da**2 + dLoss_db**2);
+            } else {
+                gradientVec.set(dLoss_da, dLoss_db, 0);
+            }
+            const threshold = 0.15;
+            if (gradientVec.length() < threshold) {
+                gradientVec.normalize();
+                gradientVec.multiplyScalar(threshold);
+            }
+            const curVec = new THREE.Vector3(a, b, height + 0.05);
+            const diffVec = new THREE.Vector3().subVectors(curVec, gradientVec);
+            gradientGeometry.setFromPoints([curVec, diffVec]);
+        }
+
+        // Function to update both graphs
+        function updateGraphs() {
+            approximator.a = params.a;
+            approximator.b = params.b;
+            updateTopGraph()
+            updateBottomGraph();
+            params.loss = calculateLoss(params.a, params.b);
+            params.function = `${params.activationFunction}(${params.a.toFixed(2)}x + ${params.b.toFixed(2)})`;
+        }
+
+        // Function to randomize data points
+        function randomizeDataPoints() {
+            const minX = -params.datasetRange/2;
+            const maxX = params.datasetRange/2;
+            dataPointsX.length = 0;
+            for (let i = 0; i < params.numDataPoints; i++) {
+                dataPointsX.push(Math.random() * (maxX - minX) + minX);
+            }
+            gui.updateDisplay();
+            updateGraphs();
+        }
+
+        function randomizeParams() {
+            params.a = Math.random() * 10 - 5;
+            params.b = Math.random() * 10 - 5;
+            velocity.a = 0;
+            velocity.b = 0;
+            gui.updateDisplay();
+            updateGraphs();
+        }
+
+
+        // velocity for momentum
+        const velocity = {a: 0, b: 0};
+        async function backpropStep() {
+            const [dLoss_da, dLoss_db] = calculateGradient();
+
+            velocity.a = params.momentum * velocity.a - params.learningRate * dLoss_da;
+            velocity.b = params.momentum * velocity.b - params.learningRate * dLoss_db;
+            params.a += velocity.a;
+            params.b += velocity.b;
+            
+            gui.updateDisplay();
+            updateGraphs();
+        }
+
+        async function localSearchStep() {
+            const num = params.neighbors;
+            const step_size = params.stepSize;
+            const population = [];
+            const startA = params.a;
+            const startB = params.b;
+
+            lossGroup.remove(currentLossPoint, gradientMesh);
+
+            const neighborMeshes = [];
+            function addNeighbor(a, b, loss) {
+                const geometry = new THREE.SphereGeometry(0.02, 5, 5);
+                const material = new THREE.MeshBasicMaterial({ color: 0x98fb98 });
+                const mesh = new THREE.Mesh(geometry, material);
+                    
+                lossGroup.add(mesh);
+                let height = params.showLandscape ? loss : 0;
+                if (params.followLoss)
+                    mesh.position.set(a - params.a, b - params.b, height);
+                else
+                    mesh.position.set(a, b, height);
+                neighborMeshes.push(mesh);
+            }
+            addNeighbor(params.a, params.b, calculateLoss(params.a, params.b));
+            for (let i = 0; i < num; i++) {
+                const a = params.a + (Math.random() - 0.5) * step_size;
+                const b = params.b + (Math.random() - 0.5) * step_size;
+                const loss = calculateLoss(a, b);
+                population.push({a, b, loss});
+
+                addNeighbor(a, b, loss);
+            }
+
+            await new Promise((resolve) => setTimeout(resolve, params.stepTime * 1000));
+            lossGroup.add(currentLossPoint);
+            if (params.showGradient)
+                lossGroup.add(gradientMesh);
+            lossGroup.remove(...neighborMeshes);
+
+            if (params.a !== startA || params.b !== startB)
+                return; // if the user changed the parameters, don't update
+
+            population.sort((a, b) => a.loss - b.loss);
+            const curLoss = calculateLoss(params.a, params.b);
+            if (population[0].loss < curLoss) {
+                params.a = population[0].a;
+                params.b = population[0].b;
+                gui.updateDisplay();
+                updateGraphs();
+            }
+        }
+
+        async function step() {
+            if (params.randomizeOnStep)
+                randomizeDataPoints();
+            if (params.learningAlgo === 'gradient descent') {
+                await backpropStep();
+            } else {
+                await localSearchStep();
+            }
+        }
+
+        let timeout;
+        async function train() {
+            await step();
+            if (params.train) {
+                timeout = setTimeout(train, params.stepTime * 1000);
+            }
+        }
+
+        stopTraining = () => {
+            clearTimeout(timeout);
+        }
+
+        functionMap = {
+            'sin': 'Math.sin(x)',
+            'cos': 'Math.cos(x)',
+            'gaussian': 'Math.exp(-Math.pow(x, 2) / 2)',
+            'tanh': 'Math.tanh(x)',
+            'power': 'Math.pow(x, 2)',
+            'exponential': 'Math.exp(x)',
+            'log': 'Math.log(Math.abs(x) + 1)',
+            'abs': 'Math.abs(x)',
+        }
+
+        // Set up dat.GUI
+        const params = {
+            targetFunction: 'Math.sin(x)',
+            otherFunctions: 'sin',
+            activationFunction: 'tanh',
+            a: 1,
+            b: 0,
+            function: 'tanh(1x + 0)',
+            randomizeParams: randomizeParams,
+            numDataPoints: 10,
+            datasetRange: 2,
+            randomizeOnStep: false,
+            randomizeDataPoints: randomizeDataPoints,
+            learningAlgo: 'gradient descent',
+            step,
+            train: false,
+            learningRate: 0.1,
+            momentum: 0.3,
+            neighbors: 5,
+            stepSize: 0.2,
+            landscapeSize: 10,
+            stepTime: 0.1,
+            followLoss: false,
+            showTarget: true,
+            showDataset: true,
+            showGradient: true,
+            lossFunction: 'MSE',
+            showLandscape: true,
+        };
+        let oldNumDataPoints = params.numDataPoints;
+        let oldDataRange = params.datasetRange;
+
+        params.loss = calculateLoss(params.a, params.b);
+
+        const gui = new dat.GUI( { width: 500 } );
+
+        randomizeDataPoints();
+        randomizeParams();
+
+        const targetFuncFolder = gui.addFolder('Target Function');
+        targetFuncFolder.add(params, 'targetFunction').listen().name('Function');
+        targetFuncFolder.add(params, 'otherFunctions', Object.keys(functionMap)).name('Other Functions').onChange((val) => {
+            params.targetFunction = functionMap[val];
+            changeTargetFunction();
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                // listen for Enter key to change target function
+                changeTargetFunction();
+                // also triggers for any Enter but whatever
+            }
+        });
+
+        const model = gui.addFolder('Model');
+        const activationFunctions = ['tanh', 'sin', 'relu', 'leaky relu', 'gelu', 'sigmoid', 'gaussian', 'softplus', 'abs'];
+        model.add(params, 'activationFunction', activationFunctions).onChange(updateActivation).name('Activation Function');
+        model.add(params, 'a', -5, 5).onChange(updateGraphs);
+        model.add(params, 'b', -5, 5).onChange(updateGraphs);
+        model.add(params, 'function').listen().name('Approx Function').onChange(updateGraphs);
+        model.add(params, 'randomizeParams').name('Randomize Model');
+        model.open();
+
+        const dataset = gui.addFolder('Dataset');
+        function setDataParams() {
+            if (params.numDataPoints !== oldNumDataPoints || params.datasetRange !== oldDataRange) {
+                randomizeDataPoints();
+                oldNumDataPoints = params.numDataPoints;
+                oldDataRange = params.datasetRange;
+            }
+        }
+        dataset.add(params, 'numDataPoints', 1, 50, 1).onChange(setDataParams).name('Data Points');
+        dataset.add(params, 'datasetRange', 1, 10).onChange(setDataParams).name('Data Range');
+        dataset.add(params, 'lossFunction', ['MSE', 'MAE']).onChange(updateGraphs).name('Loss Function');
+        dataset.add(params, 'randomizeDataPoints').name('Randomize Data');
+        dataset.add(params, 'randomizeOnStep').name('Simulate Batching');
+
+        function showFunctions() {
+            if (params.showTarget) {
+                topGroup.add(targetLine);
+            } else {
+                topGroup.remove(targetLine);
+            }
+        }
+        function showDataset() {
+            if (params.showDataset) {
+                topGroup.add(trueDataPoints);
+            } else {
+                topGroup.remove(trueDataPoints);
+            }
+        }
+        function showGradient() {
+            if (params.showGradient) {
+                lossGroup.add(gradientMesh);
+            } else {
+                lossGroup.remove(gradientMesh);
+            }
+        }
+        function showLandscape() {
+            if (params.showLandscape) {
+                lossGroup.add(lossLandMesh);
+            } else {
+                lossGroup.remove(lossLandMesh);
+            }
+            updateBottomGraph();
+        }
+        const display = gui.addFolder('Display');
+        display.add(params, 'showLandscape').onChange(showLandscape).name('Show Landscape');
+        display.add(params, 'landscapeSize', 5, 20, 1).onChange(updateGraphs).name('Landscape Size');
+        display.add(params, 'stepTime', 0.05, 1).name('Step Time');
+        display.add(params, 'followLoss').onChange((updateBottomGraph)).name('Follow Loss Point');
+        display.add(params, 'showTarget').onChange(showFunctions).name('Show Target');
+        display.add(params, 'showDataset').onChange(showDataset).name('Show Dataset');
+        display.add(params, 'showGradient').onChange(showGradient).name('Show Gradient');
+
+        const gradDescent = gui.addFolder('Gradient Descent');
+        gradDescent.add(params, 'learningRate', 0.01, 1).listen().name('Learning Rate');
+        gradDescent.add(params, 'momentum', 0, 1).name('Momentum');
+
+        const localSearch = gui.addFolder('Local Search');
+        localSearch.add(params, 'neighbors', 1, 10, 1).name('Neighbors');
+        localSearch.add(params, 'stepSize', 0.01, 3).name('Step Size');
+        localSearch.hide();
+
+        gui.add(params, 'learningAlgo', ['gradient descent', 'local search']).name('Learning Algorithm').onChange((algo) => {
+            if (algo === 'gradient descent') {
+                gradDescent.show();
+                localSearch.hide();
+            } else {
+                gradDescent.hide();
+                localSearch.show();
+            }
+        });
+        gui.add(params, 'step').name('Step Once');
+        gui.add(params, 'train').name('Train').onChange((start) => {
+            if (start)
+                train();
+            else
+                stopTraining();
+        });
+        gui.add(params, 'loss').listen().name('Current Loss').onChange(updateGraphs);
+
+
+        // Initial graph update
+        function updateActivation(name) {
+            setApproximator(name);
+            updateGraphs();
+        }
+        updateGraphs();
+
+        // Create a group to hold the loss mesh and current loss point
+        lossGroup.add(lossLandMesh);
+        lossGroup.add(currentLossPoint);
+        lossGroup.add(baselineMesh);
+        lossGroup.add(gradientMesh);
+        lossGroup.scale.set(0.5, 0.5, 0.5);
+        sceneBottom.add(lossGroup);
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.clear();
+            renderer.setViewport(0, bottomHeight, window.innerWidth, topHeight);
+            renderer.render(sceneTop, cameraTop);
+            renderer.setViewport(0, 0, window.innerWidth, bottomHeight);
+            renderer.render(sceneBottom, cameraBottom);
+        }
+
+        // Variables for drag functionality
+        let isDragging = false;
+        let previousMousePosition = {
+            x: 0,
+            y: 0,
+            top: false
+        };
+
+        // Mouse event listeners
+        renderer.domElement.addEventListener('mousedown', onMouseDown, false);
+        renderer.domElement.addEventListener('mousemove', onMouseMove, false);
+        renderer.domElement.addEventListener('mouseup', onMouseUp, false);
+        renderer.domElement.addEventListener('mouseleave', onMouseUp, false);
+        // scroll event listener
+        window.addEventListener('wheel', function(event) {
+            if (event.clientY > topHeight) {
+                if (event.deltaY > 0)
+                    lossGroup.scale.set(lossGroup.scale.x * 0.9, lossGroup.scale.y * 0.9, lossGroup.scale.z * 0.9);
+                else
+                    lossGroup.scale.set(lossGroup.scale.x * 1.1, lossGroup.scale.y * 1.1, lossGroup.scale.z * 1.1);
+                lossGroup.scale.set(
+                    Math.min(Math.max(lossGroup.scale.x, 0.1), 2),
+                    Math.min(Math.max(lossGroup.scale.y, 0.1), 2),
+                    Math.min(Math.max(lossGroup.scale.z, 0.1), 2)
+                );
+            }
+            else {
+                if (event.deltaY > 0)
+                    topGroup.scale.set(topGroup.scale.x * 0.9, topGroup.scale.y * 0.9, topGroup.scale.z * 0.9);
+                else
+                    topGroup.scale.set(topGroup.scale.x * 1.1, topGroup.scale.y * 1.1, topGroup.scale.z * 1.1);
+                topGroup.scale.set(
+                    Math.min(Math.max(topGroup.scale.x, 0.1), 5),
+                    Math.min(Math.max(topGroup.scale.y, 0.1), 5),
+                    Math.min(Math.max(topGroup.scale.z, 0.1), 5)
+                );
+            }
+        });
+
+        function onMouseDown(event) {
+            isDragging = true;
+        }
+
+        function onMouseMove(event) {
+            let top = event.clientY > topHeight;
+            if (isDragging) {
+                const deltaMove = {
+                    x: event.clientX - previousMousePosition.x,
+                    y: event.clientY - previousMousePosition.y
+                };
+                if (top !== previousMousePosition.top) {
+                    onMouseUp();
+                    return;
+                }
+
+                if (top) {
+                    lossGroup.rotation.z += deltaMove.x * 0.005;
+                    lossGroup.rotation.x += deltaMove.y * 0.005;
+                    lossGroup.rotation.x = Math.min(Math.max(lossGroup.rotation.x, -Math.PI / 2), Math.PI / 4);
+                }
+                else {
+                    const move = 0.02;
+                    topGroup.position.x += deltaMove.x * move;
+                    topGroup.position.y -= deltaMove.y * move;
+                    previousMousePosition.top = true;
+                }
+            }
+
+            previousMousePosition.x = event.clientX;
+            previousMousePosition.y = event.clientY;
+            previousMousePosition.top = top;
+        }
+
+        function onMouseUp(event) {
+            isDragging = false;
+        }
+
+        animate();
+
+        // Handle window resizing
+        window.addEventListener('resize', onWindowResize, false);
+        function onWindowResize() {
+            calcHeights();
+            cameraTop.aspect = window.innerWidth / topHeight;
+            cameraBottom.aspect = window.innerWidth / bottomHeight;
+            cameraTop.updateProjectionMatrix();
+            cameraBottom.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+    </script>
+</body>
+</html>
