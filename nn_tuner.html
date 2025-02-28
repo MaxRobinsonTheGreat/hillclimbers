@@ -16,6 +16,14 @@
             color: #ddd;
             font-family: Arial, sans-serif;
         }
+        select {
+            background-color: #333;
+            color: white;
+            border: none;
+        }
+        .dg {
+            font-size: 18px;
+        }
     </style>
 </head>
 <body>
@@ -59,6 +67,9 @@
 
         currentNetwork = new NeuralNetwork(2, Math.tanh);
 
+        const approxColor = 0x00ff00;
+        const trueColor = 0x0000ff;
+
         // Three.js setup
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x1a1a1a);
@@ -94,8 +105,8 @@
         trueLineGeometry.setAttribute('position', new THREE.BufferAttribute(truePositions, 3));
         approximatedLineGeometry.setAttribute('position', new THREE.BufferAttribute(approximatedPositions, 3));
 
-        const trueLine = new THREE.Line(trueLineGeometry, new THREE.LineBasicMaterial({ color: 0x00ff00 }));
-        const approximatedLine = new THREE.Line(approximatedLineGeometry, new THREE.LineBasicMaterial({ color: 0xff4444 }));
+        const trueLine = new THREE.Line(trueLineGeometry, new THREE.LineBasicMaterial({ color: trueColor }));
+        const approximatedLine = new THREE.Line(approximatedLineGeometry, new THREE.LineBasicMaterial({ color: approxColor }));
 
         const group = new THREE.Group();
         group.add(trueLine);
@@ -118,7 +129,7 @@
         }
 
         const pointGeometry = new THREE.BufferGeometry();
-        const pointMaterial = new THREE.PointsMaterial({ size: 10, color: 0x00ff00 });
+        const pointMaterial = new THREE.PointsMaterial({ size: 10, color: trueColor });
 
 
         const positions = new Float32Array(dataPoints.length * 3);
@@ -153,12 +164,12 @@
         console.log(controls);
 
 
-        gui.add(controls, 'w1', -10, 10).name('1').onChange(updateNetwork);
-        gui.add(controls, 'w2', -10, 10).name('2').onChange(updateNetwork);
-        gui.add(controls, 'w3', -10, 10).name('3').onChange(updateNetwork);
-        gui.add(controls, 'w4', -10, 10).name('4').onChange(updateNetwork);
-        gui.add(controls, 'w5', -10, 10).name('5').onChange(updateNetwork);
-        gui.add(controls, 'w6', -10, 10).name('6').onChange(updateNetwork);
+        gui.add(controls, 'w1', -10, 10).name('a').onChange(updateNetwork);
+        gui.add(controls, 'w2', -10, 10).name('b').onChange(updateNetwork);
+        gui.add(controls, 'w3', -10, 10).name('c').onChange(updateNetwork);
+        gui.add(controls, 'w4', -10, 10).name('d').onChange(updateNetwork);
+        gui.add(controls, 'w5', -10, 10).name('e').onChange(updateNetwork);
+        gui.add(controls, 'w6', -10, 10).name('f').onChange(updateNetwork);
         gui.add(controls, 'step').name('Local Search Step');
         let interval = null;
         gui.add(controls, 'train').name('Train').onChange(() => {

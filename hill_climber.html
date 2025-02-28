@@ -20,7 +20,7 @@
             border: none;
         }
         .dg {
-            font-size: 14px;
+            font-size: 18px;
         }
 
     </style>
@@ -61,8 +61,6 @@
             // flatShading: true
 
         });
-        // q: what does vertexColors do?
-        // a: it allows the mesh to be colored by the colors of its vertices m
         const lossWireframeMaterial = new THREE.MeshBasicMaterial({ 
             color: 0xffffff, 
             wireframe: true, 
@@ -251,6 +249,16 @@
                 }
                 approximator.dYdB = function (x) {
                     return (this.a * x + this.b) >= 0 ? 1 : -1;
+                }
+            } else if (name === 'binary step') {
+                approximator.f = function (x) {
+                    return this.a * x + this.b > 0 ? 1 : 0;
+                }
+                approximator.dYdA = function (x) {
+                    return x > 0 ? 1 : 0;
+                }
+                approximator.dYdB = function (x) {
+                    return x > 0 ? 1 : 0;
                 }
             } else {
                 approximator.f = function (x) {
@@ -598,7 +606,7 @@
         });
 
         const model = gui.addFolder('Model');
-        const activationFunctions = ['tanh', 'sin', 'relu', 'leaky relu', 'gelu', 'sigmoid', 'gaussian', 'softplus', 'abs'];
+        const activationFunctions = ['tanh', 'sin', 'relu', 'leaky relu', 'gelu', 'sigmoid', 'gaussian', 'softplus', 'abs', 'binary step'];
         model.add(params, 'activationFunction', activationFunctions).onChange(updateActivation).name('Activation Function');
         model.add(params, 'a', -5, 5).onChange(updateGraphs);
         model.add(params, 'b', -5, 5).onChange(updateGraphs);
@@ -803,3 +811,7 @@
     </script>
 </body>
 </html>
+
+<!-- 
+what other strange creatures live in parameter space?
+-->
